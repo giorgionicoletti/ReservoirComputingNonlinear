@@ -35,11 +35,13 @@ class RateEchoStateNet():
         self.method = method
 
         if method == 'rk4':
-            self.dynamical_step = utils.rk4_step.recompile()
+            self.dynamical_step = utils.rk4_step
         elif method == 'euler':
-            self.dynamical_step = utils.euler_step.recompile()
+            self.dynamical_step = utils.euler_step
         else:
-            raise ValueError("Method must be either 'rk4' or 'euler', no other integrations steps are implemented yet.")
+            raise utils.NotImplemented("Method must be either 'rk4' or 'euler', no other integrations steps are implemented yet.")
+
+        self.dynamical_step.recompile()
 
         self.nonlin = nonlinearity
         self.args_nonlin = args_nonlin
@@ -86,11 +88,18 @@ class RateEchoStateNet():
         
         self.generate_recurrent = True
             
-    def _set_dynamics(self):
+    def _set_dynamics(self, dynamical_step = None, nonlinearity = None, args_nonlin = None):
+        if dynamical_step is not None:
+            self.dynamical_step = dynamical_step
+        if nonlinearity is not None:
+            self.nonlin = nonlinearity
+        if args_nonlin is not None:
+            self.args_nonlin = args_nonlin
+
         self.params_dyn = (self.dt, self.tau_E, self.tau_I,
                            self.Win, self.WEE, self.WEI, self.WIE, self.WII, 
                            self.biases_E, self.biases_I, self.gamma,
-                           self.nonlin, self.args_nonlin, self.method)
+                           self.nonlin, self.args_nonlin, self.dynamical_step)
             
     def _set_plasticity(self, eta_EE, eta_EI, eta_IE, eta_II, rho_E, rho_I):
         self.eta_EE = eta_EE
@@ -183,8 +192,20 @@ class RateEchoStateNet():
                 axs[i].plot(np.arange(u.shape[0]), u[:, i], ls = '--', c = 'navy', lw = 1)
                 axs[i].axvline(idx_start + idx_echo, c = 'darkred')
                 axs[i].set_xlim(idx_start, idx_start + idx_echo + nLoops + 1)
+            axs[0].set_ylabel('$x$', fontsize = 20)
+            axs[1].set_ylabel('$y$', fontsize = 20)
+            axs[2].set_ylabel('$z$', fontsize = 20)
+            axs[3].set_xlabel('Timestep', fontsize = 20)
+            axs[3].set_ylabel('E nodes', fontsize = 20)
                 
-            axs[-1].pcolormesh(Steps, np.arange(self.NE), E_echo.T, cmap = "turbo", shading = 'auto')
+            axs[-1].pcolormesh(Steps, np.arange(self.NE), E_echo.T,
+                               cmap = "turbo", shading = 'auto',
+                               vmin = 0, vmax = 1)
+            cb_ax = fig.add_axes([.88,.12,.04,.15])
+            cb_ax.axis('off')
+            cbar = fig.colorbar(axs[-1].collections[0], ax = cb_ax)
+            cbar.set_label('$E$', fontsize = 20, rotation = 270, labelpad = 20)
+
             plt.show()
 
         return E_echo, I_echo, output_echo

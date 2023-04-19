@@ -27,6 +27,30 @@ class NotInitialized(Exception):
         self.err = err
         super().__init__(self.err)
 
+class NotImplemented(Exception):
+    """
+    A custom exception class, raised when something is not implemented.
+
+    Parameters
+    ----------
+    err : str
+        The error message to be printed.
+
+    Attributes
+    ----------
+    err : str
+        The error message to be printed.
+    
+    Methods
+    -------
+    __init__(self, err = "Not itialized")
+        The constructor.
+    """
+    def __init__(self, err = "Not implemented"):
+        self.err = err
+        super().__init__(self.err)
+
+
 def parallelize(func, iterable, global_variables, num_cores):
     """
     Parallelize a function using the concurrent.futures module.
@@ -385,9 +409,9 @@ def euler_step(E, I, ut, dt, tau_E, tau_I, Win, WEE, WEI, WIE, WII, biases_E, bi
 def integrate_dynamics(u, E0, I0,
                        dt, tau_E, tau_I,
                        Win, WEE, WEI, WIE, WII,
-                       biases_E, biases_I, gamma, fun_nl, args, method = 'rk4'):
+                       biases_E, biases_I, gamma, fun_nl, args, dynamical_step):
     """
-    Integrate dynamics either using Runge-Kutta 4th order or Euler method.
+    Integrate dynamics using a custom dynamical step, such as RK4 or a Euler step.
 
     Parameters
     ----------
@@ -423,9 +447,12 @@ def integrate_dynamics(u, E0, I0,
         The nonlinearity function.
     args : tuple
         The arguments of the nonlinearity function.
-    method : str
-        The integration method. Either 'rk4' or 'euler'.
-    
+    dynamical_step : function
+        The function that performs the dynamical step. It must be a function
+        decorated with @njit, and compatible with the arguments of this function.
+        Passing the function directly allows for higher level compilation in the
+        class that wraps the numba-enabled functions.
+
     Returns
     -------
     E : np.ndarray
@@ -433,11 +460,6 @@ def integrate_dynamics(u, E0, I0,
     I : np.ndarray
         The state of the inhibitory population.
     """
-
-    if method == 'rk4':
-        dynamical_step = rk4_step
-    else:
-        dynamical_step = euler_step
 
     NE, NI = WEI.shape
     nSteps = u.shape[0]
@@ -458,7 +480,7 @@ def run_echo_state(nLoops, idx_start, idx_echo, Wout,
                    u, E0, I0,
                    dt, tau_E, tau_I,
                    Win, WEE, WEI, WIE, WII,
-                   biases_E, biases_I, gamma, fun_nl, args, method = 'rk4'):
+                   biases_E, biases_I, gamma, fun_nl, args, dynamical_step):
     """
     Run the echo state dynamics by clamping the input for a number of steps first,
     and then feeding the output to the input layer and letting the network evolve.
@@ -505,8 +527,12 @@ def run_echo_state(nLoops, idx_start, idx_echo, Wout,
         The nonlinearity function.
     args : tuple
         The arguments of the nonlinearity function.
-    method : str
-        The integration method. Either 'rk4' or 'euler'.
+    dynamical_step : function
+        The function that performs the dynamical step. It must be a function
+        decorated with @njit, and compatible with the arguments of this function.
+        Passing the function directly allows for higher level compilation in the
+        class that wraps the numba-enabled functions.
+
     
     Returns
     -------
@@ -530,35 +556,18 @@ def run_echo_state(nLoops, idx_start, idx_echo, Wout,
     output_sequence = np.zeros((nLoops + 1 + idx_echo, NInputs), dtype = np.float64)
 
     output_sequence[0] = np.dot(Wout, E[0])
-        
-    # There is a weird numba behavior here, defining the dynamical_step function as
-    # before gives in an error due to contiguity of the arrays. This is why the
-    # integration method is defined inside the function and the code is repeated.
 
-    if method == 'rk4':
-        for t in range(idx_echo):
-            E[t+1], I[t+1] = rk4_step(E[t], I[t], u[idx_start + t], dt, tau_E, tau_I,
-                                      Win, WEE, WEI, WIE, WII,
-                                      biases_E, biases_I, gamma, fun_nl, args)
-            output_sequence[t+1] = np.dot(Wout, E[t+1])
-
-        for t in range(idx_echo, nLoops + idx_echo):
-            E[t+1], I[t+1] = rk4_step(E[t], I[t], output_sequence[t], dt, tau_E, tau_I,
-                                      Win, WEE, WEI, WIE, WII,
-                                      biases_E, biases_I, gamma, fun_nl, args)
-            output_sequence[t+1] = np.dot(Wout, E[t+1])
-    else:
-        for t in range(idx_echo):
-            E[t+1], I[t+1] = euler_step(E[t], I[t], u[t], dt, tau_E, tau_I,
+    for t in range(idx_echo):
+        E[t+1], I[t+1] = dynamical_step(E[t], I[t], u[idx_start + t], dt, tau_E, tau_I,
                                         Win, WEE, WEI, WIE, WII,
                                         biases_E, biases_I, gamma, fun_nl, args)
-            output_sequence[t+1] = np.dot(Wout, E[t+1])
+        output_sequence[t+1] = np.dot(Wout, E[t+1])
 
-        for t in range(idx_echo, nLoops + idx_echo):
-            E[t+1], I[t+1] = euler_step(E[t], I[t], output_sequence[t], dt, tau_E, tau_I,
+    for t in range(idx_echo, nLoops + idx_echo):
+        E[t+1], I[t+1] = dynamical_step(E[t], I[t], output_sequence[t], dt, tau_E, tau_I,
                                         Win, WEE, WEI, WIE, WII,
                                         biases_E, biases_I, gamma, fun_nl, args)
-            output_sequence[t+1] = np.dot(Wout, E[t+1])
+        output_sequence[t+1] = np.dot(Wout, E[t+1])
 
     return E, I, output_sequence
 
@@ -567,7 +576,7 @@ def run_echo_state(nLoops, idx_start, idx_echo, Wout,
 def plasticity_numba(u, E0, I0,
                      eta_EE, eta_EI, eta_IE, eta_II, rho_E, rho_I,
                      dt, Win, WEE, WEI, WIE, WII, tau_E, tau_I,
-                     biases_E, biases_I, gamma, fun_nl, args, method = 'rk4'):
+                     biases_E, biases_I, gamma, fun_nl, args, dynamical_step):
     """
     Performs the simulation of the dynamical system with plasticity, by changing
     the weights during the dynamics of the network with the external input.
@@ -614,6 +623,15 @@ def plasticity_numba(u, E0, I0,
         The biases of the inhibitory population.
     gamma : float
         The gain of the excitatory population.
+    fun_nl : function
+        The nonlinearity function.
+    args : tuple
+        The arguments of the nonlinearity function.
+    dynamical_step : function
+        The function that performs the dynamical step. It must be a function
+        decorated with @njit, and compatible with the arguments of this function.
+        Passing the function directly allows for higher level compilation in the
+        class that wraps the numba-enabled functions.
 
     Returns
     -------
@@ -630,12 +648,6 @@ def plasticity_numba(u, E0, I0,
     np.ndarray
         The final inhibitory to inhibitory weights.
     """
-
-    if method == 'rk4':
-        dynamical_step = rk4_step
-    else:
-        dynamical_step = euler_step
-
 
     NE, NI = WEI.shape
     nSteps = u.shape[0]
