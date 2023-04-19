@@ -2,6 +2,7 @@ import numpy as np
 from numba import njit, prange
 
 import scipy.signal
+from concurrent.futures import ProcessPoolExecutor
 
 class NotInitialized(Exception):
     """
@@ -25,6 +26,42 @@ class NotInitialized(Exception):
     def __init__(self, err = "Not itialized"):
         self.err = err
         super().__init__(self.err)
+
+def parallelize(func, iterable, global_variables, num_cores):
+    """
+    Parallelize a function using the concurrent.futures module.
+    RAM-consuming arguments should be passed as global variables.
+
+    Parameters
+    ----------
+    func : function
+        function to be parallelized
+    iterable : list
+        list of arguments to be passed to the function.
+        These arguments will be copied to each process, so it is best to pass a list of small objects
+        and declare shared variables in the global namespace, using the global_variables parameter
+    global_variables : dict
+        dictionary of global variables to be passed to the function
+        This prevents copies of the arguments that may result in large memory usage
+        Global variables are created in the scope of the function, and the keys of the dictionary are the
+        names of the variables used in func. The values of the dictionary are the values of the variables.
+    num_cores : int
+        number of cores to use
+    
+    Returns
+    -------
+    result : iterator
+        iterator of the results
+    """
+    # iterate through the dictionary global_variables and add the variables to the global namespace
+    for key, value in global_variables.items():
+        globals()[key] = value
+
+    with ProcessPoolExecutor(max_workers=num_cores) as executor:
+        result = executor.map(func, iterable)
+        
+    return result
+
 
 
 ########################
@@ -125,6 +162,9 @@ def sigmoid(x):
     """
     return 1/(1 + np.exp(-x))
 
+
+
+
 ####################
 # Lorenz functions #
 ####################
@@ -177,6 +217,8 @@ def return_map(data):
 
     M = scipy.signal.argrelextrema(data, np.greater)[0]
     return data[M[:-1]], data[M[1:]]
+
+
 
 
 ####################
@@ -279,36 +321,34 @@ def rk4_step(E, I, ut, dt, tau_E, tau_I, Win, WEE, WEI, WIE, WII, biases_E, bias
     dotI : np.ndarray
         The derivative of the state of the inhibitory population.
     """
-    f1_E, f1_I = dotE_dotI(E, I, ut, tau_E, tau_I, Win, WEE, WEI, WIE, WII, biases_E, biases_I, gamma, fun_nl, *args)
+    f1_E, f1_I = dotE_dotI(E, I,
+                           ut, tau_E, tau_I, Win, WEE, WEI, WIE, WII, biases_E, biases_I, gamma, fun_nl, args)
     f2_E, f2_I = dotE_dotI(E + f1_E*dt/2, I + f1_I*dt/2,
-                           ut, tau_E, tau_I, Win, WEE, WEI, WIE, WII, biases_E, biases_I, gamma, fun_nl, *args)
+                           ut, tau_E, tau_I, Win, WEE, WEI, WIE, WII, biases_E, biases_I, gamma, fun_nl, args)
     f3_E, f3_I = dotE_dotI(E + f2_E*dt/2, I + f2_I*dt/2,
-                           ut, tau_E, tau_I, Win, WEE, WEI, WIE, WII, biases_E, biases_I, gamma, fun_nl, *args)
+                           ut, tau_E, tau_I, Win, WEE, WEI, WIE, WII, biases_E, biases_I, gamma, fun_nl, args)
     f4_E, f4_I = dotE_dotI(E + f3_E*dt, I + f3_I*dt,
-                           ut, tau_E, tau_I, Win, WEE, WEI, WIE, WII, biases_E, biases_I, gamma, fun_nl, *args)
+                           ut, tau_E, tau_I, Win, WEE, WEI, WIE, WII, biases_E, biases_I, gamma, fun_nl, args)
 
     return E + dt/6*(f1_E + 2*f2_E + 2*f3_E + f4_E), I + dt/6*(f1_I + 2*f2_I + 2*f3_I + f4_I)
 
-
-@njit
-def dynamical_step(ut, E, I, dt_E, dt_I, Win, WEE, WEI, WIE, WII, biases_E, biases_I, gamma, fun_nl, args):
+@njit(fastmath = True)
+def euler_step(E, I, ut, dt, tau_E, tau_I, Win, WEE, WEI, WIE, WII, biases_E, biases_I, gamma, fun_nl, args):
     """
-    Performs a single step of the dynamical system.
+    The Euler integration step.
 
     Parameters
     ----------
-    ut : np.ndarray
-        The input vector.
     E : np.ndarray
         The state of the excitatory population.
     I : np.ndarray
         The state of the inhibitory population.
-    dt_E : float
-        The time step normalized with the characteristic time of
-        the excitatory population.
-    dt_I : float
-        The time step normalized with the characteristic time of
-        the inhibitory population.
+    ut : np.ndarray
+        The input vector at time t.
+    tau_E : float
+        The characteristic time of the excitatory population.
+    tau_I : float
+        The characteristic time of the inhibitory population.
     Win : np.ndarray
         The input weights.
     WEE : np.ndarray
@@ -324,7 +364,7 @@ def dynamical_step(ut, E, I, dt_E, dt_I, Win, WEE, WEI, WIE, WII, biases_E, bias
     biases_I : np.ndarray
         The biases of the inhibitory population.
     gamma : float
-        The gain of the excitatory population.
+        The strength of the recurrent connections.
     fun_nl : function
         The nonlinearity function.
     args : tuple
@@ -332,33 +372,37 @@ def dynamical_step(ut, E, I, dt_E, dt_I, Win, WEE, WEI, WIE, WII, biases_E, bias
     
     Returns
     -------
-    np.ndarray
-        The new state of the excitatory population.
-    np.ndarray
-        The new state of the inhibitory population.
+    dotE : np.ndarray
+        The derivative of the state of the excitatory population.
+    dotI : np.ndarray
+        The derivative of the state of the inhibitory population.
     """
-        
-    new_E = E + dt_E*(-E + gamma*fun_nl(np.dot(WEE, E) - np.dot(WEI, I) + np.dot(ut, Win) - biases_E, *args))
-    new_I = I + dt_I*(-I + fun_nl(np.dot(WIE, E) - np.dot(WII, I) - biases_I, *args))
+    f1_E, f1_I = dotE_dotI(E, I, ut, tau_E, tau_I, Win, WEE, WEI, WIE, WII, biases_E, biases_I, gamma, fun_nl, args)
 
-    return new_E, new_I
+    return E + dt*f1_E, I + dt*f1_I
 
-@njit(nogil = True)
-def recurrent_numba(u, E0, I0,
-                    dt, Win, WEE, WEI, WIE, WII, tau_E, tau_I, biases_E, biases_I, gamma, fun_nl = ReLU):
+@njit
+def integrate_dynamics(u, E0, I0,
+                       dt, tau_E, tau_I,
+                       Win, WEE, WEI, WIE, WII,
+                       biases_E, biases_I, gamma, fun_nl, args, method = 'rk4'):
     """
-    Performs the simulation of the dynamical system.
+    Integrate dynamics either using Runge-Kutta 4th order or Euler method.
 
     Parameters
     ----------
     u : np.ndarray
-        The input time series.
+        The input vector.
     E0 : np.ndarray
         The initial state of the excitatory population.
     I0 : np.ndarray
         The initial state of the inhibitory population.
     dt : float
         The time step.
+    tau_E : float
+        The characteristic time of the excitatory population.
+    tau_I : float
+        The characteristic time of the inhibitory population.
     Win : np.ndarray
         The input weights.
     WEE : np.ndarray
@@ -369,24 +413,32 @@ def recurrent_numba(u, E0, I0,
         The excitatory to inhibitory weights.
     WII : np.ndarray
         The inhibitory to inhibitory weights.
-    tau_E : float
-        The characteristic time of the excitatory population.
-    tau_I : float
-        The characteristic time of the inhibitory population.
     biases_E : np.ndarray
         The biases of the excitatory population.
     biases_I : np.ndarray
         The biases of the inhibitory population.
     gamma : float
-        The gain of the excitatory population.
-
+        The strength of the recurrent connections.
+    fun_nl : function
+        The nonlinearity function.
+    args : tuple
+        The arguments of the nonlinearity function.
+    method : str
+        The integration method. Either 'rk4' or 'euler'.
+    
     Returns
     -------
-    np.ndarray
-        The state of the excitatory population at all times.
-    np.ndarray
-        The state of the inhibitory population at all times.
+    E : np.ndarray
+        The state of the excitatory population.
+    I : np.ndarray
+        The state of the inhibitory population.
     """
+
+    if method == 'rk4':
+        dynamical_step = rk4_step
+    else:
+        dynamical_step = euler_step
+
     NE, NI = WEI.shape
     nSteps = u.shape[0]
     
@@ -395,22 +447,130 @@ def recurrent_numba(u, E0, I0,
 
     E[0] = E0
     I[0] = I0
-    
-    dt_E = dt/tau_E
-    dt_I = dt/tau_I
-    
+        
     for t in range(nSteps - 1):
-        E[t+1], I[t+1] = dynamical_step(u[t], E[t], I[t], dt_E, dt_I, Win, WEE, WEI, WIE, WII, biases_E, biases_I, gamma, fun_nl)
+        E[t+1], I[t+1] = dynamical_step(E[t], I[t], u[t], dt, tau_E, tau_I, Win, WEE, WEI, WIE, WII, biases_E, biases_I, gamma, fun_nl, args)
                 
     return E, I
+
+@njit
+def run_echo_state(nLoops, idx_start, idx_echo, Wout,
+                   u, E0, I0,
+                   dt, tau_E, tau_I,
+                   Win, WEE, WEI, WIE, WII,
+                   biases_E, biases_I, gamma, fun_nl, args, method = 'rk4'):
+    """
+    Run the echo state dynamics by clamping the input for a number of steps first,
+    and then feeding the output to the input layer and letting the network evolve.
+
+    Parameters
+    ----------
+    nLoops : int
+        The number of steps to run the network during the echo state phase.
+    idx_start : int
+        The index of the first step of the clamped input phase.
+    idx_echo : int
+        The index of the first step of the echo state phase.
+    Wout : np.ndarray
+        The output weights.
+    u : np.ndarray
+        The input vector.
+    E0 : np.ndarray
+        The initial state of the excitatory population.
+    I0 : np.ndarray
+        The initial state of the inhibitory population.
+    dt : float
+        The time step.
+    tau_E : float
+        The characteristic time of the excitatory population.
+    tau_I : float
+        The characteristic time of the inhibitory population.
+    Win : np.ndarray
+        The input weights.
+    WEE : np.ndarray
+        The excitatory to excitatory weights.
+    WEI : np.ndarray
+        The inhibitory to excitatory weights.
+    WIE : np.ndarray
+        The excitatory to inhibitory weights.
+    WII : np.ndarray
+        The inhibitory to inhibitory weights.
+    biases_E : np.ndarray
+        The biases of the excitatory population.
+    biases_I : np.ndarray
+        The biases of the inhibitory population.
+    gamma : float
+        The strength of the recurrent connections.
+    fun_nl : function
+        The nonlinearity function.
+    args : tuple
+        The arguments of the nonlinearity function.
+    method : str
+        The integration method. Either 'rk4' or 'euler'.
+    
+    Returns
+    -------
+    E : np.ndarray
+        The state of the excitatory population.
+    I : np.ndarray
+        The state of the inhibitory population.
+    output_sequence : np.ndarray
+        The output sequence during the clamp phase and the echo state phase.
+    """
+
+    NE, NI = WEI.shape
+    _, NInputs = u.shape
+    
+    E = np.zeros((nLoops + 1 + idx_echo, NE), dtype = np.float64)
+    I = np.zeros((nLoops + 1 + idx_echo, NI), dtype = np.float64)
+
+    E[0] = E0
+    I[0] = I0
+
+    output_sequence = np.zeros((nLoops + 1 + idx_echo, NInputs), dtype = np.float64)
+
+    output_sequence[0] = np.dot(Wout, E[0])
+        
+    # There is a weird numba behavior here, defining the dynamical_step function as
+    # before gives in an error due to contiguity of the arrays. This is why the
+    # integration method is defined inside the function and the code is repeated.
+
+    if method == 'rk4':
+        for t in range(idx_echo):
+            E[t+1], I[t+1] = rk4_step(E[t], I[t], u[idx_start + t], dt, tau_E, tau_I,
+                                      Win, WEE, WEI, WIE, WII,
+                                      biases_E, biases_I, gamma, fun_nl, args)
+            output_sequence[t+1] = np.dot(Wout, E[t+1])
+
+        for t in range(idx_echo, nLoops + idx_echo):
+            E[t+1], I[t+1] = rk4_step(E[t], I[t], output_sequence[t], dt, tau_E, tau_I,
+                                      Win, WEE, WEI, WIE, WII,
+                                      biases_E, biases_I, gamma, fun_nl, args)
+            output_sequence[t+1] = np.dot(Wout, E[t+1])
+    else:
+        for t in range(idx_echo):
+            E[t+1], I[t+1] = euler_step(E[t], I[t], u[t], dt, tau_E, tau_I,
+                                        Win, WEE, WEI, WIE, WII,
+                                        biases_E, biases_I, gamma, fun_nl, args)
+            output_sequence[t+1] = np.dot(Wout, E[t+1])
+
+        for t in range(idx_echo, nLoops + idx_echo):
+            E[t+1], I[t+1] = euler_step(E[t], I[t], output_sequence[t], dt, tau_E, tau_I,
+                                        Win, WEE, WEI, WIE, WII,
+                                        biases_E, biases_I, gamma, fun_nl, args)
+            output_sequence[t+1] = np.dot(Wout, E[t+1])
+
+    return E, I, output_sequence
 
 
 @njit(parallel = True)
 def plasticity_numba(u, E0, I0,
                      eta_EE, eta_EI, eta_IE, eta_II, rho_E, rho_I,
-                     dt, Win, WEE, WEI, WIE, WII, tau_E, tau_I, biases_E, biases_I, gamma, fun_nl = ReLU):
+                     dt, Win, WEE, WEI, WIE, WII, tau_E, tau_I,
+                     biases_E, biases_I, gamma, fun_nl, args, method = 'rk4'):
     """
-    Performs the simulation of the dynamical system with plasticity.
+    Performs the simulation of the dynamical system with plasticity, by changing
+    the weights during the dynamics of the network with the external input.
 
     Parameters
     ----------
@@ -471,6 +631,12 @@ def plasticity_numba(u, E0, I0,
         The final inhibitory to inhibitory weights.
     """
 
+    if method == 'rk4':
+        dynamical_step = rk4_step
+    else:
+        dynamical_step = euler_step
+
+
     NE, NI = WEI.shape
     nSteps = u.shape[0]
     
@@ -488,8 +654,10 @@ def plasticity_numba(u, E0, I0,
     for t in range(nSteps - 1):
         Input = np.dot(u[t], Win)
 
-        E[t+1], I[t+1] = dynamical_step(u[t], E[t], I[t], dt_E, dt_I, Win, WEE, WEI, WIE, WII, biases_E, biases_I, gamma, fun_nl)
-                        
+        E[t+1], I[t+1] = dynamical_step(E[t], I[t], u[t], dt, tau_E, tau_I,
+                                        Win, WEE, WEI, WIE, WII, biases_E, biases_I,
+                                        gamma, fun_nl, args)
+        
         for i in prange(NE):            
             SumIncoming = 0.
             for j in range(NE):
