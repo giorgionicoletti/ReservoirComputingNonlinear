@@ -14,10 +14,56 @@ import scipy.integrate
 import utils
 
 class RateEchoStateNet():
-    
+    """
+    Class for a rate-based Echo State Network, which uses a Wilson-Cowan-like
+    model for the dynamics of the neurons.
+
+    The network is initialized with the given parameters, and then it can be
+    trained with the given input and output data, or it can be used to generate
+    a recurrent sequence in the echo state.
+    """
     def __init__(self, NE, NI, NInputs, dt, tau_E, tau_I,
                  gamma = 1, max_bias = 1, seed = 42, burnSteps = 10000, input_sparse = 0.8,
                  method = 'rk4', nonlinearity = utils.ReLU, args_nonlin = ()):
+        
+        """
+        Initializes the network with the given parameters.
+
+        Parameters
+        ----------
+        NE : int
+            Number of excitatory neurons.
+        NI : int
+            Number of inhibitory neurons.
+        NInputs : int
+            Dimension of the input space.
+        dt : float
+            Time step.
+        tau_E : float
+            Time constant of the excitatory neurons.
+        tau_I : float
+            Time constant of the inhibitory neurons.
+        gamma : float, optional
+            Gain factor of the excitatory population. The default is 1.
+            Not really needed.
+        max_bias : float, optional
+            Maximum value of the bias, which are randomly generated between 0 and max_bias.
+            The default is 1. If None, no bias is added.
+        seed : int, optional
+            Seed for the random number generator. The default is 42.
+        burnSteps : int, optional
+            Number of steps to initialize the network to forget the initial conditions.
+            The default is 10000.
+        input_sparse : float, optional
+            Sparsity of the input weights. The default is 0.8.
+        method : str, optional
+            Integration method. The default is 'rk4', but 'euler' is also available.
+        nonlinearity : function, optional
+            Nonlinearity to be used. The default is ReLU. The function must be compiled with numba.
+        args_nonlin : tuple, optional
+            Arguments of the nonlinearity. The default is ().
+        """
+
         np.random.seed(seed)
         
         self.NE = NE
@@ -89,6 +135,19 @@ class RateEchoStateNet():
         self.generate_recurrent = True
             
     def _set_dynamics(self, dynamical_step = None, nonlinearity = None, args_nonlin = None):
+        """
+        Set the dynamics of the network in a tuple of parameters.
+
+        Parameters
+        ----------
+        dynamical_step : function, optional
+            Function to be used to integrate the dynamics.
+            The default is None, in which case the default function is used.
+        nonlinearity : function, optional
+            Nonlinearity to be used. The default is None, in which case the default nonlinearity is used.
+        args_nonlin : tuple, optional
+            Arguments of the nonlinearity. The default is None, in which case the default arguments are used.
+        """
         if dynamical_step is not None:
             self.dynamical_step = dynamical_step
         if nonlinearity is not None:
@@ -102,6 +161,24 @@ class RateEchoStateNet():
                            self.nonlin, self.args_nonlin, self.dynamical_step)
             
     def _set_plasticity(self, eta_EE, eta_EI, eta_IE, eta_II, rho_E, rho_I):
+        """
+        Set the parameters of the plasticity in a tuple of parameters.
+
+        Parameters
+        ----------
+        eta_EE : float
+            Learning rate for excitatory-excitatory connections.
+        eta_EI : float
+            Learning rate for excitatory-inhibitory connections.
+        eta_IE : float
+            Learning rate for inhibitory-excitatory connections.
+        eta_II : float
+            Learning rate for inhibitory-inhibitory connections.
+        rho_E : float
+            Target firing rate for excitatory neurons.
+        rho_I : float
+            Target firing rate for inhibitory neurons.
+        """
         self.eta_EE = eta_EE
         self.eta_II = eta_II
         self.eta_EI = eta_EI
@@ -114,7 +191,16 @@ class RateEchoStateNet():
         
         self.params_plast = (self.eta_EE, self.eta_EI, self.eta_IE, self.eta_II, self.rho_E, self.rho_I)
         
-    def run_plasticity(self, u, log = True):
+    def run_plasticity(self, u):
+        """
+        Wrapper to run the plasticity step.
+
+        Parameters
+        ----------
+        u : array
+            Input to the network.
+        """
+
         if not self.plasticity:
             raise utils.NotInitialized("Plasticity parameters have not been initialized yet")
             
@@ -127,6 +213,26 @@ class RateEchoStateNet():
         self.WEE, self.WEI, self.WIE, self.WII = results[2:]
         
     def run_recurrent(self, u, E0 = None, I0 = None):
+        """
+        Wrapper to integrate the dynamics of the network.
+
+        Parameters
+        ----------
+        u : array
+            Input to the network.
+        E0 : array, optional
+            Initial condition for excitatory neurons.
+            The default is None, in which case the default initial condition is used.
+        I0 : array, optional
+            Initial condition for inhibitory neurons.
+            The default is None, in which case the default initial condition is used.
+
+        Returns
+        -------
+        results : tuple
+            Tuple containing the results of the integration.
+        """
+
         assert u.shape[1] == self.NInputs
         
         if E0 is None:
@@ -140,7 +246,37 @@ class RateEchoStateNet():
     
     def train_model(self, u, initTraining, alpha, max_iter = 1000,
                     plot = True, set_Wout = True):
-        
+        """
+        Train the model with linear regression.
+
+        Parameters
+        ----------
+        u : array
+            Input to the network.
+        initTraining : int
+            Initial time step for training.
+        alpha : float
+            Regularization parameter for linear regression.
+        max_iter : int, optional
+            Maximum number of iterations for linear regression.
+            The default is 1000.
+        plot : bool, optional
+            Whether to plot the results or not.
+            The default is True.
+        set_Wout : bool, optional
+            Whether to set the output weights or not.
+            The default is True.
+
+        Returns
+        -------
+        Wout : array
+            Output weights of the trained model.
+            Only returned if set_Wout is True.
+        MSE : float
+            Mean squared error of the trained model.
+        trained_output : array
+            Output of the trained model.
+        """
         if self.generate_recurrent == True:
             self.E_rec, self.I_rec = self.run_recurrent(u)
             self.generate_recurrent = False
@@ -175,6 +311,26 @@ class RateEchoStateNet():
             return Wout, MSE, trained_output
     
     def echo_state(self, u, nLoops, idx_start, idx_echo, plot = False, Wout = None):
+        """
+        Wrapper to run the echo state.
+
+        Parameters
+        ----------
+        u : array
+            Input to the network.
+        nLoops : int
+            Number of steps in the echo state to run.
+        idx_start : int
+            Initial time step for the echo state.
+        idx_echo : int
+            Number of steps to run before the echo state.
+        plot : bool, optional
+            Whether to plot the results or not.
+            The default is False.
+        Wout : array, optional
+            Output weights of the network.
+            The default is None, in which case the default output weights are used.
+        """
         E0 = self.E_rec[idx_start]
         I0 = self.I_rec[idx_start]
 
@@ -212,20 +368,70 @@ class RateEchoStateNet():
         return E_echo, I_echo, output_echo
             
     def predict(self, E):
+        """
+        Predict the output of the network given the state of the E nodes.
+
+        Parameters
+        ----------
+        E : array
+            State of the E nodes.
+
+        Returns
+        -------
+        output : array
+            Output of the network.
+        """
         return np.dot(self.Wout, E)
     
-    def return_input(self, ut):        
+    def return_input(self, ut):
+        """
+        Return the input to the network trough the input weights.
+
+        Parameters
+        ----------
+        ut : array
+            Input to the network at time t.
+
+        Returns
+        -------
+        array
+            Input to the network.
+        """     
         return np.dot(ut, self.Win)
     
     def dynamical_step(self, E, I, ut):
-        if self.method == 'rk4':
-            new_E, new_I = utils.rk4step(E, I, ut, *self.params_dyn)
-        else:
-            new_E, new_I = utils.euler_step(E, I, ut, *self.params_dyn)
+        """
+        Helper method to perform a dynamical step.
+
+        Parameters
+        ----------
+        E : array
+            State of the E nodes at time t.
+        I : array
+            State of the I nodes at time t.
+        ut : array
+            Input to the network at time t.
+
+        Returns
+        -------
+        new_E : array
+            State of the E nodes at time t + dt.
+        new_I : array
+            State of the I nodes at time t + dt.
+        """
+        new_E, new_I = self.dynamical_step(E, I, ut, *self.params_dyn)
         
         return new_E, new_I
     
     def plot_attractor(self, u):
+        """
+        Plot the attractor corresponding to the trajectory u.
+
+        Parameters
+        ----------
+        u : array
+            Trajectory.
+        """
         fig = plt.figure(figsize = (20,5))
         axs = fig.subplot_mosaic('A03;A14;A25')
         ss = axs['A'].get_subplotspec()
@@ -241,6 +447,21 @@ class RateEchoStateNet():
         plt.show()
 
     def compute_histograms(self, vals, bins):
+        """
+        Compute the histograms of the values in vals.
+
+        Parameters
+        ----------
+        vals : array    
+            Values to compute the histograms of.
+        bins : array
+            Bins to use for the histograms.
+
+        Returns
+        -------
+        h : array
+            Histograms of the values in vals.
+        """
         h = np.zeros((3, bins.size-1), dtype=np.float64)
 
         for i in range(3):
@@ -249,9 +470,44 @@ class RateEchoStateNet():
         return h
     
     def histogram_distance(self, h1, h2):
+        """
+        Compute the distance between two histograms using the same bins.
+
+        Parameters
+        ----------
+        h1 : array
+            First histogram.
+        h2 : array
+            Second histogram.
+        
+        Returns
+        -------
+        float
+            Distance between the two histograms.
+        """
+
         return np.sqrt(np.sum((h1 - h2)**2, axis = 1)).mean()
     
     def compare_results(self, u, output_echo, NBins, plot = True):
+        """
+        Compare the results of the reservoir with the real trajectory.
+
+        Parameters
+        ----------
+        u : array
+            Real trajectory.
+        output_echo : array
+            Output of the reservoir.
+        NBins : int
+            Number of bins to use for the histograms.
+        plot : bool, optional
+            Whether to plot the results. The default is True.
+
+        Returns
+        -------
+        float
+            Distance between the histograms of the real trajectory and the output of the reservoir.
+        """
         max_val = np.max(u)
         max_val = np.max([max_val, np.max(output_echo)])
 
@@ -284,7 +540,30 @@ class RateEchoStateNet():
 
     def fit_alpha(self, u, initTraining, idx_start, idx_echo, nLoops,
                   alpha_min = 1e-6, alpha_max = 1e-2, NAlpha = 10, NBins = 100):
-        
+        """
+        Fit the optimal regularization parameter alpha.
+
+        Parameters
+        ----------
+        u : array
+            Input to the reservoir.
+        initTraining : int
+            Initial time step for training.
+        idx_start : int
+            Initial time step for the echo state phase (with clamping).
+        idx_echo : int
+            Time step at which the echo state phase starts, without clamping.
+        nLoops : int
+            Number of loops to perform in the echo state phase.
+        alpha_min : float, optional
+            Minimum value of alpha to try. The default is 1e-6.
+        alpha_max : float, optional
+            Maximum value of alpha to try. The default is 1e-2.
+        NAlpha : int, optional
+            Number of values of alpha to try. The default is 10.
+        NBins : int, optional
+            Number of bins to use for the histograms. The default is 100.
+        """
         self.trained = False
 
         alpha_array = np.linspace(alpha_min, alpha_max, NAlpha)
