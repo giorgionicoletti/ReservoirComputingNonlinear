@@ -575,7 +575,7 @@ def run_echo_state(nLoops, idx_start, idx_echo, Wout,
 @njit(parallel = True)
 def plasticity_numba(u, E0, I0,
                      eta_EE, eta_EI, eta_IE, eta_II, rho_E, rho_I,
-                     dt, Win, WEE, WEI, WIE, WII, tau_E, tau_I,
+                     dt, tau_E, tau_I, Win, WEE, WEI, WIE, WII,
                      biases_E, biases_I, gamma, fun_nl, args, dynamical_step):
     """
     Performs the simulation of the dynamical system with plasticity, by changing
@@ -658,11 +658,11 @@ def plasticity_numba(u, E0, I0,
     E[0] = E0
     I[0] = I0
     
-    sum_from_input = np.sum(Win, axis = 0)
-    
-    dt_E = dt/tau_E
-    dt_I = dt/tau_I
-    
+    sum_from_input = np.zeros(NE, dtype = np.float64)
+    for i in range(NE):
+        sum_from_input[i] = np.sum(Win[:,i])
+
+        
     for t in range(nSteps - 1):
         Input = np.dot(u[t], Win)
 
@@ -717,4 +717,4 @@ def plasticity_numba(u, E0, I0,
                     SumIncoming += WIE[i, j]
             WIE[i] /= SumIncoming
                     
-    return E, I
+    return E, I, WEE, WEI, WIE, WII

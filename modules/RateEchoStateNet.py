@@ -123,7 +123,8 @@ class RateEchoStateNet():
                         
         results = utils.plasticity_numba(*args)
 
-        self.E_plasticity, self.I_plasticity = results
+        self.E_plasticity, self.I_plasticity = results[:2]
+        self.WEE, self.WEI, self.WIE, self.WII = results[2:]
         
     def run_recurrent(self, u, E0 = None, I0 = None):
         assert u.shape[1] == self.NInputs
@@ -266,9 +267,9 @@ class RateEchoStateNet():
             fig, axs = plt.subplots(figsize = (20,5), ncols = 3)
             for i in range(3):
                 axs[i].bar((bins[1:] + bins[:-1])/2, h_real[i], width = np.diff(bins),
-                           color = 'orangered', label = 'Real')
+                           color = 'navy', label = 'Real', zorder = 0)
                 axs[i].bar((bins[1:] + bins[:-1])/2, h_echo[i], width = np.diff(bins),
-                           color = 'navy', alpha = 0.5, label = 'Echo')
+                           color = 'orangered', alpha = 0.5, label = 'Echo', zorder = 1)
                 axs[i].legend(fontsize = 20)
             axs[2].set_xlabel('Timestep', fontsize = 20)
             axs[0].set_ylabel('$x$', fontsize = 20)
