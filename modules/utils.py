@@ -132,7 +132,7 @@ def ReLU_Sat(x, sat = 10):
     return np.minimum(x, sat)
 
 @njit(fastmath=True)
-def ReLU_Poly(x, eps = 0, sat = 10):
+def ReLU_Poly(x, eps = 0, sat = 10, exp = 2):
     """
     Implementation of the ReLU function with second-order polynomial correction.
 
@@ -148,8 +148,8 @@ def ReLU_Poly(x, eps = 0, sat = 10):
     np.ndarray
         The output array passed through the ReLU function with second-order polynomial correction.
     """
-    x = (x > 0) * (x + eps*x**2)
-    return np.minimum(x, sat)
+    x = (x > 0) * x
+    return np.minimum(x + eps*x**exp, sat)
 
 @njit(fastmath=True)
 def ReLU_Log(x, eps = 0):

@@ -546,8 +546,8 @@ class RateEchoStateNet():
             Distance between the histograms of the real trajectory and the output of the reservoir.
         """
         if np.min(output_echo) < -0.5 or np.max(output_echo) > 1.5:
-            min_val = np.min(u)
-            max_val = np.max(u)
+            print('Warning: the output of the reservoir is not in [-0.5, 1.5].')
+            error = np.inf
         else:
             max_val = np.max(u)
             max_val = np.max([max_val, np.max(output_echo)])
@@ -555,29 +555,31 @@ class RateEchoStateNet():
             min_val = np.min(u)
             min_val = np.min([min_val, np.min(output_echo)])
 
-        bins = np.linspace(min_val, max_val, NBins)
+            bins = np.linspace(min_val, max_val, NBins)
 
-        h_real = self.compute_histograms(u, bins = bins)
-        h_echo = self.compute_histograms(output_echo, bins = bins)
+            h_real = self.compute_histograms(u, bins = bins)
+            h_echo = self.compute_histograms(output_echo, bins = bins)
 
-        if plot:
-            fig, axs = plt.subplots(figsize = (20,5), ncols = 3)
-            for i in range(3):
-                axs[i].bar((bins[1:] + bins[:-1])/2, h_real[i], width = np.diff(bins),
-                           color = 'navy', label = 'Real', zorder = 0)
-                axs[i].bar((bins[1:] + bins[:-1])/2, h_echo[i], width = np.diff(bins),
-                           color = 'orangered', alpha = 0.5, label = 'Echo', zorder = 1)
-                axs[i].legend(fontsize = 20)
-            axs[2].set_xlabel('Timestep', fontsize = 20)
-            axs[0].set_ylabel('$x$', fontsize = 20)
-            axs[1].set_ylabel('$y$', fontsize = 20)
-            axs[2].set_ylabel('$z$', fontsize = 20)
+            if plot:
+                fig, axs = plt.subplots(figsize = (20,5), ncols = 3)
+                for i in range(3):
+                    axs[i].bar((bins[1:] + bins[:-1])/2, h_real[i], width = np.diff(bins),
+                            color = 'navy', label = 'Real', zorder = 0)
+                    axs[i].bar((bins[1:] + bins[:-1])/2, h_echo[i], width = np.diff(bins),
+                            color = 'orangered', alpha = 0.5, label = 'Echo', zorder = 1)
+                    axs[i].legend(fontsize = 20)
+                axs[2].set_xlabel('Timestep', fontsize = 20)
+                axs[0].set_ylabel('$x$', fontsize = 20)
+                axs[1].set_ylabel('$y$', fontsize = 20)
+                axs[2].set_ylabel('$z$', fontsize = 20)
 
-            plt.subplots_adjust(wspace=0.3)
-        
-            plt.show()
+                plt.subplots_adjust(wspace=0.3)
+            
+                plt.show()
 
-        return self.histogram_distance(h_real, h_echo)
+            error = self.histogram_distance(h_real, h_echo)
+
+        return error
 
     def fit_alpha(self, u, initTraining, idx_start, idx_echo, nLoops,
                   alpha_min = 1e-6, alpha_max = 1e-2, NAlpha = 10, NBins = 100):
