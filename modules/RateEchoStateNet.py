@@ -70,8 +70,8 @@ class RateEchoStateNet():
         self.NI = NI
         self.NInputs = NInputs
         
-        self.Win = np.random.randn(self.NInputs, self.NE)
-        self.Win[self.Win < input_sparse] = 0
+        Win = np.random.randn(self.NInputs, self.NE)
+        Win[Win < input_sparse] = 0
         
         self.dt = dt
         self.tau_E = tau_E
@@ -94,21 +94,24 @@ class RateEchoStateNet():
         
         self.plasticity = False
                 
-        self.WEE = np.random.rand(NE, NE)
-        self.WEE[np.diag_indices(NE)] = 0
+        WEE = np.random.rand(NE, NE)
+        WEE[np.diag_indices(NE)] = 0
         
-        self.WII = np.random.rand(NI, NI)
-        self.WII[np.diag_indices(NI)] = 0
+        WII = np.random.rand(NI, NI)
+        WII[np.diag_indices(NI)] = 0
 
-        self.WIE = np.random.rand(NI, NE)
-        self.WEI = np.random.rand(NE, NI)
+        WIE = np.random.rand(NI, NE)
+        WEI = np.random.rand(NE, NI)
 
-        for W in [self.WIE, self.WII]:
+        for W in [WIE, WII]:
             W /= np.sum(W, axis = 1)[..., None]
             
-        for W in [self.WEI, self.WEE]:
-            W /= (np.sum(W, axis = 1) + self.Win.sum(axis = 0))[..., None]
+        for W in [WEI, WEE]:
+            W /= (np.sum(W, axis = 1) + Win.sum(axis = 0))[..., None]
         
+        self._set_network(WEE, WII, WEI, WIE, Win,
+                          normalize = False)
+
         if max_bias is not None:
             self.biases_E = np.random.uniform(0, max_bias, size = self.NE)
             self.biases_I = np.random.uniform(0, max_bias, size = self.NI)
@@ -133,6 +136,40 @@ class RateEchoStateNet():
         self._set_dynamics()
         
         self.generate_recurrent = True
+
+    def _set_network(self, WEE, WII, WEI, WIE, Win,
+                     normalize = False):
+        """
+        Set the network with the given weight matrices.
+
+        Parameters
+        ----------
+        WEE : np.array
+            Weight matrix between excitatory neurons.
+        WII : np.array
+            Weight matrix between inhibitory neurons.
+        WEI : np.array
+            Weight matrix between excitatory and inhibitory neurons.
+        WIE : np.array
+            Weight matrix between inhibitory and excitatory neurons.
+        Win : np.array
+            Input weight matrix.
+        """
+        if normalize:
+            WEE[np.diag_indices(self.NE)] = 0
+            WII[np.diag_indices(self.NI)] = 0
+
+            for W in [WIE, WII]:
+                W /= np.sum(W, axis = 1)[..., None]
+                
+            for W in [WEI, WEE]:
+                W /= (np.sum(W, axis = 1) + Win.sum(axis = 0))[..., None]
+
+        self.WEE = WEE
+        self.WII = WII
+        self.WEI = WEI
+        self.WIE = WIE
+        self.Win = Win
             
     def _set_dynamics(self, dynamical_step = None, nonlinearity = None, args_nonlin = None):
         """
@@ -508,11 +545,15 @@ class RateEchoStateNet():
         float
             Distance between the histograms of the real trajectory and the output of the reservoir.
         """
-        max_val = np.max(u)
-        max_val = np.max([max_val, np.max(output_echo)])
+        if np.min(output_echo) < -0.5 or np.max(output_echo) > 1.5:
+            min_val = np.min(u)
+            max_val = np.max(u)
+        else:
+            max_val = np.max(u)
+            max_val = np.max([max_val, np.max(output_echo)])
 
-        min_val = np.min(u)
-        min_val = np.min([min_val, np.min(output_echo)])
+            min_val = np.min(u)
+            min_val = np.min([min_val, np.min(output_echo)])
 
         bins = np.linspace(min_val, max_val, NBins)
 
